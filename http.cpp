@@ -5,6 +5,11 @@
 #include <sstream>
 #include <variant>
 #include <iomanip>
+#include <fstream>
+#include <random>
+#include <filesystem>
+#include <algorithm>
+#include <memory>
 #else
 import <Windows.h>;
 import <string>;
@@ -12,6 +17,11 @@ import <unordered_map>;
 import <sstream>;
 import <variant>;
 import <iomanip>;
+import <fstream>;
+import <random>;
+import <filesystem>;
+import <algorithm>;
+import <memory>;
 #endif
 #include <winhttp.h>;
 #include "magic.hpp"//github.com/anohobby/cpp_magic
@@ -62,13 +72,12 @@ namespace http {
 		class Stream = std::basic_stringstream<typename decltype(Separator)::value_type >
 	>
 	class Container {
-	private:
-		T data;
 	protected:
+		T data;
 		using string_type = std::basic_string<typename decltype(Separator)::value_type>;
 		using data_type = T;
-		using construct_type = std::initializer_list<typename T::value_type>;
 	public:
+		using construct_type = std::initializer_list<typename T::value_type>;
 		Container(construct_type data):data(data){}
 		virtual string_type to_string()const {
 			Stream result;
@@ -116,7 +125,28 @@ namespace http {
 		KeyValueStream<Separator, std::basic_stringstream<typename decltype(Separator)::value_type > >
 	>;
 	export using Form_Url_Encoded =KeyValue<"=","&">;
-	export using Header = KeyValue<L":",L"\r\n">;
+	using Header_Type = KeyValue<L":",L"\r\n">;
+	export class Header:public Header_Type{
+	private:
+	public:
+		Header(Header_Type::construct_type data):Container(data){}
+		auto emplace(auto&&... args) {
+			data.emplace(std::forward<decltype(args)>(args)...);
+		}
+	};
+	export class Data_Type {
+	private:
+		Header header;
+	public:
+		virtual std::string to_string_body() = 0;
+		virtual std::wstring to_string_header() {
+			return std::move(header.to_string());
+		}
+		Data_Type(decltype(header) && header = {}) :header(header) {};
+		auto emplace(auto&&... args) {
+			header.emplace(std::forward<decltype(args)>(args)...);
+		}
+	};
 	namespace json {
 	template <class T>
 	class Visit_Stream {
@@ -239,95 +269,161 @@ namespace http {
 
 			}
 		};
-	};
-	export class Client {
-	public:
-		enum class methods {
-			GET,
-			POST
-		};
+	};	
+	export class Json :public Data_Type {
 	private:
-		class Handle {
-		private:
-			const HINTERNET handle;
-		public:
-			Handle(HINTERNET&& handle) :handle(handle) {
+		json::Object json;
+		auto init() {
+			emplace(L"Content-Type", L"application/json");
+		}
+	public:
+		Json(Header&& header = {},json::Object::construct_type data = {}) :Data_Type(std::move(header)), json(data) {
+			init();
+		}
+		Json(json::Object::construct_type data) : json(data) {
+			init();
+		}
+		std::string to_string_body()override {
+			return std::move(json.to_string());
+		}
+	};
+	export enum class methods {
+		GET,
+		POST
+	};
+	class Handle {
+	private:
+		const HINTERNET handle;
+	public:
+		Handle(HINTERNET&& handle) :handle(handle) {
 
+		}
+		~Handle() {
+			WinHttpCloseHandle(handle);
+		}
+		const auto& get()const noexcept {
+			return handle;
+		}
+	};
+	template <methods method>
+	class Request {
+	private:
+		const Handle request;
+	public:
+		Request(const Handle& connect, const URL& url, std::wstring&& header, std::string&& body) :
+			request(
+				WinHttpOpenRequest(
+					connect.get(),
+					[] {
+
+						constexpr auto method_name = magic::get_enum_value_name<method>();
+						return magic::String<wchar_t, method_name.size()>(method_name.data()).buffer;
+					}(),
+						url.get_url_path().c_str(),
+						nullptr,
+						WINHTTP_NO_REFERER,
+						WINHTTP_DEFAULT_ACCEPT_TYPES,
+						url.get_is_https() ? WINHTTP_FLAG_SECURE : 0
+						))
+		{
+			WinHttpSendRequest(
+				request.get(),
+				header.data(),
+				-1,
+				body.data(),
+				body.size(),
+				body.size(),
+				0
+			);
+			WinHttpReceiveResponse(request.get(), nullptr);
+		}
+		auto query_header() {
+			DWORD size;
+			WinHttpQueryHeaders(request.get(),
+				WINHTTP_QUERY_RAW_HEADERS_CRLF,
+				WINHTTP_HEADER_NAME_BY_INDEX,
+				WINHTTP_NO_OUTPUT_BUFFER, &size, WINHTTP_NO_HEADER_INDEX);
+			std::wstring header;
+			header.resize(size);
+			WinHttpQueryHeaders(request.get(),
+				WINHTTP_QUERY_RAW_HEADERS_CRLF,
+				WINHTTP_HEADER_NAME_BY_INDEX,
+				header.data(), &size, WINHTTP_NO_HEADER_INDEX);
+			return std::move(header);
+		}
+		unsigned short query_status_code() {
+			DWORD status, status_size = sizeof(status);
+			WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &status_size, nullptr);
+			return status;
+		}
+		auto read_content() {
+			std::string content;
+			std::size_t total_size = 0;
+			while (1) {
+				DWORD size;
+				WinHttpQueryDataAvailable(request.get(), &size);
+				if (!size)break;
+				content.resize(total_size + size);
+				WinHttpReadData(request.get(), &content[total_size], size, nullptr);
+				total_size += size;
 			}
-			~Handle() {
-				WinHttpCloseHandle(handle);
+			return std::move(content);
+		}
+	};
+	export class Multipart:public Data_Type{
+	private:
+		static constexpr auto BOUNDARY_SIZE = 60;
+		std::string boundary;
+		std::stringstream body;
+		auto generate_boundary() {
+			static std::default_random_engine engine((std::random_device())());
+			static std::uniform_int_distribution<> getRandom('0', 'z');
+			boundary.resize(BOUNDARY_SIZE);//todo:const variable
+			for (auto& c : boundary) {
+				auto random = getRandom(engine);
+				while (('9' < random && random < 'A') || ('Z' < random && random < 'a')) {
+					random = getRandom(engine);
+				}
+				c = random;
 			}
-			const auto& get()const noexcept {
-				return handle;
-			}
-		};
+			boundary[0] = boundary[1] = '-';
+		}
+		auto init() {
+			generate_boundary();
+			std::wstring value = L"multipart/form-data;boundary=";
+			std::for_each(boundary.begin() + 2, boundary.end(), [&](auto& c) {
+				value += c;
+				});
+			emplace(L"Content-Type", std::move(value));
+		}
+	public:
+		Multipart(Header && header = {}):Data_Type(std::move(header)) {
+			init();
+		}
+		auto add(std::string&& path) {
+			const auto  name = std::move(std::filesystem::path(path).filename());
+			body << boundary << "\r\nContent-Disposition: form-data;filename=" << name << "\r\n";
+			std::ifstream file(path, std::ios::binary);
+			std::copy(std::move_iterator(std::istreambuf_iterator<char>(file)), std::move_iterator(std::istreambuf_iterator<char>()), std::ostreambuf_iterator(body));
+			body <<"\r\n" << boundary;
+		}
+		Multipart(std::string&& path,Header&& header = {}) :Data_Type(std::move(header)) {
+			init();
+			add(std::move(path));
+		}
+		Multipart(auto&&... path) {
+			init();
+			(add(std::move(path)),...);
+		}
+		std::string to_string_body() override{
+			return std::move(body.str()+"--\r\n");
+		}
+	};
+
+	export class Client {
+	private:
 		const URL url;
 		const Handle session, connect;
-		template <methods method>
-		class Request {
-		private:
-			const Handle request;
-		public:
-			Request(const Handle& connect, const URL& url, std::wstring&& header, std::string&& body) :
-				request(
-					WinHttpOpenRequest(
-						connect.get(),
-						[] {
-
-							constexpr auto method_name = magic::get_enum_value_name<method>();
-							return magic::String<wchar_t, method_name.size()>(method_name.data()).buffer;
-						}(),
-							url.get_url_path().c_str(),
-							nullptr,
-							WINHTTP_NO_REFERER,
-							WINHTTP_DEFAULT_ACCEPT_TYPES,
-							url.get_is_https() ? WINHTTP_FLAG_SECURE : 0
-							))
-			{
-				WinHttpSendRequest(
-					request.get(),
-					header.data(),
-					-1,
-					body.data(),
-					body.size(),
-					body.size(),
-					0
-				);
-				WinHttpReceiveResponse(request.get(), nullptr);
-			}
-			auto query_header() {
-				DWORD size;
-				WinHttpQueryHeaders(request.get(),
-					WINHTTP_QUERY_RAW_HEADERS_CRLF,
-					WINHTTP_HEADER_NAME_BY_INDEX,
-					WINHTTP_NO_OUTPUT_BUFFER, &size, WINHTTP_NO_HEADER_INDEX);
-				std::wstring header;
-				header.resize(size);
-				WinHttpQueryHeaders(request.get(),
-					WINHTTP_QUERY_RAW_HEADERS_CRLF,
-					WINHTTP_HEADER_NAME_BY_INDEX,
-					header.data(), &size, WINHTTP_NO_HEADER_INDEX);
-				return std::move(header);
-			}
-			unsigned short query_status_code() {
-				DWORD status, status_size = sizeof(status);
-				WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &status_size, nullptr);
-				return status;
-			}
-			auto read_content() {
-				std::string content;
-				std::size_t total_size = 0;
-				while (1) {
-					DWORD size;
-					WinHttpQueryDataAvailable(request.get(), &size);
-					if (!size)break;
-					content.resize(total_size + size);
-					WinHttpReadData(request.get(), &content[total_size], size, nullptr);
-					total_size += size;
-				}
-				return std::move(content);
-			}
-		};
 	public:
 		Client(std::wstring&& url, std::wstring&& user_agent = L"") :
 			url(std::move(url)),
@@ -337,8 +433,12 @@ namespace http {
 
 		}
 		template <methods method>
-		auto request(Header&& header = {}, std::string&& body = {}) {
+		auto request(Header&& header = {}, std::string body = {}) {
 			return Request<method>(connect, url, std::move(header.to_string()), std::move(body));
+		}
+		template <methods method>
+		auto request(Data_Type&& data) {
+			return Request<method>(connect, url, data.to_string_header(),data.to_string_body());
 		}
 	};
 
