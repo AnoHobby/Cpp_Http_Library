@@ -356,6 +356,25 @@ namespace http {
 			WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &status_size, nullptr);
 			return status;
 		}
+		auto query_cookies() {
+			std::vector<std::wstring> cookies;
+			for (DWORD index=0;;++index) {
+				DWORD size;
+				WinHttpQueryHeaders(request.get(),
+					WINHTTP_QUERY_SET_COOKIE,
+					WINHTTP_HEADER_NAME_BY_INDEX,
+					WINHTTP_NO_OUTPUT_BUFFER, &size, &index);
+				if (GetLastError() == ERROR_WINHTTP_HEADER_NOT_FOUND)break;
+				std::wstring header;
+				header.resize(size);
+				WinHttpQueryHeaders(request.get(),
+					WINHTTP_QUERY_SET_COOKIE,
+					WINHTTP_HEADER_NAME_BY_INDEX,
+					header.data(), &size, &index);
+				cookies.push_back(std::move(header));
+			}
+			return std::move(cookies);
+		}
 		auto read_content() {
 			std::string content;
 			std::size_t total_size = 0;
