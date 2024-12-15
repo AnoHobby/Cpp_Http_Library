@@ -52,7 +52,7 @@ namespace http {
 			WinHttpCrackUrl(url.c_str(), url.size(), 0, &urlComponents);
 			port = urlComponents.nPort;
 			is_https = (INTERNET_SCHEME_HTTPS == urlComponents.nScheme);
-			if (url_path.empty())return;
+			if (query_parameter.empty())return;
 			url_path.append(L"?");
 			url_path.append(query_parameter);
 		}
@@ -84,7 +84,7 @@ namespace http {
 		Container(construct_type data):data(data){}
 		virtual string_type to_string()const {
 			Stream result;
-			for (bool need_line_feed = false; const std::variant<typename T::value_type> &i: data) {//pair‚ª“ü‚Á‚Ä‚é
+			for (bool need_line_feed = false; const std::variant<typename T::value_type> &i: data) {//pairãŒå…¥ã£ã¦ã‚‹
 				if (need_line_feed) {
 					result << Separator.buffer;
 				}
@@ -195,7 +195,7 @@ namespace http {
 		//template <class T> requires requires(T s) { s.to_string(); }
 		template <auto front, auto back, class T>
 		Visit_Container_Stream& operator<<(const Scope<front,back,T>& value) {
-			ss << value.to_string().c_str();//std::string‚¾‚ÆƒGƒXƒP[ƒv‚³‚ê‚Ä‚µ‚Ü‚¤
+			ss << value.to_string().c_str();//std::stringã ã¨ã‚¨ã‚¹ã‚±ãƒ¼ãƒ—ã•ã‚Œã¦ã—ã¾ã†
 			return *this;
 		}
 		Visit_Container_Stream& operator<<(const auto& value) {
