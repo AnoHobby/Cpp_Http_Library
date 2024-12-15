@@ -35,7 +35,7 @@ namespace http {
 		unsigned short port;
 		bool is_https;
 	public:
-		URL(std::wstring&& url) {
+		URL(std::wstring&& url,std::wstring&& query_parameter=L"") {
 			URL_COMPONENTS urlComponents = { 0 };
 			urlComponents.dwStructSize = sizeof(URL_COMPONENTS);
 			constexpr auto GET_SIZE = -1;
@@ -52,6 +52,9 @@ namespace http {
 			WinHttpCrackUrl(url.c_str(), url.size(), 0, &urlComponents);
 			port = urlComponents.nPort;
 			is_https = (INTERNET_SCHEME_HTTPS == urlComponents.nScheme);
+			if (url_path.empty())return;
+			url_path.append(L"?");
+			url_path.append(query_parameter);
 		}
 		const auto& get_host_name()const noexcept {
 			return host_name;
@@ -125,6 +128,8 @@ namespace http {
 		KeyValueStream<Separator, std::basic_stringstream<typename decltype(Separator)::value_type > >
 	>;
 	export using Form_Url_Encoded =KeyValue<"=","&">;
+	export using Query_Parameter = KeyValue<L"=", L"&">;
+	export using Cookie = KeyValue<L"=", L";">;
 	using Header_Type = KeyValue<L":",L"\r\n">;
 	export class Header:public Header_Type{
 	private:
@@ -444,8 +449,8 @@ namespace http {
 		const URL url;
 		const Handle session, connect;
 	public:
-		Client(std::wstring&& url, std::wstring&& user_agent = L"") :
-			url(std::move(url)),
+		Client(std::wstring&& url,std::wstring &&query_parameter=L"", std::wstring&& user_agent = L"") :
+			url(std::move(url),std::move(query_parameter)),
 			session(WinHttpOpen(user_agent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)),
 			connect(WinHttpConnect(session.get(), this->url.get_host_name().c_str(), this->url.get_port(), 0))
 		{
@@ -455,6 +460,11 @@ namespace http {
 		auto request(Header&& header = {}, std::string body = {}) {
 			return Request<method>(connect, url, std::move(header.to_string()), std::move(body));
 		}
+		template <methods method>
+		auto request(Header& header, std::string body = {}) {
+			return Request<method>(connect, url, std::move(header.to_string()), std::move(body));
+		}
+
 		template <methods method>
 		auto request(Data_Type&& data) {
 			return Request<method>(connect, url, data.to_string_header(),data.to_string_body());
