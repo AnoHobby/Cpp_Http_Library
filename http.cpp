@@ -84,7 +84,7 @@ namespace http {
 		Container(construct_type data):data(data){}
 		virtual string_type to_string()const {
 			Stream result;
-			for (bool need_line_feed = false; const std::variant<typename T::value_type> &i: data) {//pairãŒå…¥ã£ã¦ã‚‹
+			for (bool need_line_feed = false; const std::variant<typename T::value_type> &i: data) {//pair‚ª“ü‚Á‚Ä‚é
 				if (need_line_feed) {
 					result << Separator.buffer;
 				}
@@ -195,7 +195,7 @@ namespace http {
 		//template <class T> requires requires(T s) { s.to_string(); }
 		template <auto front, auto back, class T>
 		Visit_Container_Stream& operator<<(const Scope<front,back,T>& value) {
-			ss << value.to_string().c_str();//std::stringã ã¨ã‚¨ã‚¹ã‚±ãƒ¼ãƒ—ã•ã‚Œã¦ã—ã¾ã†
+			ss << value.to_string().c_str();//std::string‚¾‚ÆƒGƒXƒP[ƒv‚³‚ê‚Ä‚µ‚Ü‚¤
 			return *this;
 		}
 		Visit_Container_Stream& operator<<(const auto& value) {
@@ -313,9 +313,10 @@ namespace http {
 	template <methods method>
 	class Request {
 	private:
-		const Handle request;
+		const Handle connect,request;
 	public:
-		Request(const Handle& connect, const URL& url, std::wstring&& header, std::string&& body) :
+		Request(const Handle& session, const URL& url, std::wstring&& header, std::string&& body) :
+			connect(WinHttpConnect(session.get(),url.get_host_name().c_str(), url.get_port(), 0)),
 			request(
 				WinHttpOpenRequest(
 					connect.get(),
@@ -447,27 +448,27 @@ namespace http {
 	export class Client {
 	private:
 		const URL url;
-		const Handle session, connect;
+		const Handle session;
 	public:
 		Client(std::wstring&& url,std::wstring &&query_parameter=L"", std::wstring&& user_agent = L"") :
 			url(std::move(url),std::move(query_parameter)),
-			session(WinHttpOpen(user_agent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)),
-			connect(WinHttpConnect(session.get(), this->url.get_host_name().c_str(), this->url.get_port(), 0))
+			session(WinHttpOpen(user_agent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0))
+			
 		{
 
 		}
 		template <methods method>
 		auto request(Header&& header = {}, std::string body = {}) {
-			return Request<method>(connect, url, std::move(header.to_string()), std::move(body));
+			return Request<method>(session, url, std::move(header.to_string()), std::move(body));
 		}
 		template <methods method>
 		auto request(Header& header, std::string body = {}) {
-			return Request<method>(connect, url, std::move(header.to_string()), std::move(body));
+			return Request<method>(session, url, std::move(header.to_string()), std::move(body));
 		}
 
 		template <methods method>
 		auto request(Data_Type&& data) {
-			return Request<method>(connect, url, data.to_string_header(),data.to_string_body());
+			return Request<method>(session, url, data.to_string_header(),data.to_string_body());
 		}
 	};
 
